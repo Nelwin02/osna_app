@@ -27,7 +27,7 @@ const app = express();
 const port = process.env.PORT || 10000;
 
 app.listen(port, () => {
-  console.log(Server running on port ${port});
+  console.log(`Server running on port ${port}`);
 });
 
 app.use(bodyParser.json());
