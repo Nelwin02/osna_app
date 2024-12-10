@@ -7,7 +7,6 @@ const path = require('path');
 const http = require('http');
 const router = express.Router();
 const nodemailer = require('nodemailer');
-const axios = require('axios');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
