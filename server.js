@@ -2,7 +2,11 @@
 const express = require('express');
 const mysql = require('mysql');
 const bodyParser = require('body-parser');
+const { Client } = require('pg');
 const cors = require('cors');
+const path = require('path');
+const http = require('http');
+const router = express.Router();
 const nodemailer = require('nodemailer');
 const axios = require('axios');
 const bcrypt = require('bcrypt');
@@ -20,111 +24,114 @@ const transporter = nodemailer.createTransport({
 });
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 10000;
 
-app.use(bodyParser.json());
-app.use(cors());
-
-// MySQL Database Connection
-const db = mysql.createConnection({
-    host: 'localhost',
-    user: 'root',
-    password: '',
-    database: 'opdmsis'
+app.listen(port, () => {
+  console.log(Server running on port ${port});
 });
 
-db.connect(err => {
-    if (err) {
-        console.error('Error connecting to the database:', err);
-        return;
-    }
-    console.log('Connected to the database');
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: true }));
+app.use(cors());
+
+
+const db = new Client({
+  connectionString: "postgresql://opdmsis_user:3sc6VNaexgXhje2UgoQ4fnvPf8x1KDGG@dpg-ct2lk83qf0us739u2uvg-a/opdmsis",
+  ssl: {
+    rejectUnauthorized: false, // This is to handle SSL certificates for the hosted database
+  }
+});
+
+db.connect((err) => {
+  if (err) {
+    console.error('Error connecting to PostgreSQL:', err);
+    process.exit(1);
+  }
+  console.log('PostgreSQL connected...');
 });
 
 app.post('/login', (req, res) => {
-    const { username, password } = req.body; // Accept username, name, or email in 'username'
+    const { username, password } = req.body;
+
     const query = `
         SELECT * 
         FROM patient_info 
         WHERE 
-            (username = ? 
-             OR email = ? 
-             OR TRIM(CONCAT(SUBSTRING_INDEX(name, ' ', 1), ' ', SUBSTRING_INDEX(SUBSTRING_INDEX(name, ' ', -2), ' ', 1))) = ?) 
-            AND password = ?
+            (username = $1 
+             OR email = $1 
+             OR TRIM(CONCAT_WS(' ', SPLIT_PART(name, ' ', 1), SPLIT_PART(name, ' ', 2))) = $1) 
+            AND password = $2
     `;
-    db.query(query, [username, username, username, password], (err, results) => {
+
+    db.query(query, [username, password], (err, result) => {
         if (err) {
+            console.error('Database error:', err);
             return res.status(500).send('Server error');
         }
-        if (results.length > 0) {
-            res.json({ success: true, username: results[0].username });
+
+        if (result.rows.length > 0) {
+            res.json({ success: true, username: result.rows[0].username });
         } else {
             res.json({ success: false, message: 'Invalid credentials' });
         }
     });
 });
 
-app.post('/forgot-password', async (req, res) => {
+app.post('/forgot-password', (req, res) => {
     const { email, name } = req.body;
 
     if (!email || !name) {
         return res.status(400).json({ success: false, message: 'Email and name are required.' });
     }
 
-    try {
-        // Check if the email and name exist in the database
-        const checkUserQuery = 'SELECT * FROM patient_info WHERE email = ? AND name = ?';
-        db.query(checkUserQuery, [email, name], (err, results) => {
-            if (err) {
-                console.error('Database error:', err);
-                return res.status(500).json({ success: false, message: 'Database error.' });
-            }
+    const checkUserQuery = 'SELECT * FROM patient_info WHERE email = $1 AND name = $2';
 
-            if (results.length === 0) {
-                // No matching record found, respond with a specific message
-                return res.status(200).json({
+    db.query(checkUserQuery, [email, name], (err, result) => {
+        if (err) {
+            console.error('Database error:', err);
+            return res.status(500).json({ success: false, message: 'Database error.' });
+        }
+
+        if (result.rows.length === 0) {
+            // No matching record found, respond with a specific message
+            return res.status(200).json({
+                success: false,
+                message: 'The provided email and name do not match our records.',
+            });
+        }
+
+        // Generate a 6-digit OTP
+        const otp = Math.floor(100000 + Math.random() * 900000); // Generates a 6-digit number
+        otpStore[email] = otp; // Store OTP temporarily
+
+        // Send OTP via email
+        const mailOptions = {
+            from: 'osnanotify@gmail.com',
+            to: email,
+            subject: 'Password Reset OTP',
+            text: `Your OTP for password reset is ${otp}. It will expire in 10 minutes.`,
+        };
+
+        transporter.sendMail(mailOptions, (error, info) => {
+            if (error) {
+                console.error('Error sending OTP email:', error);
+                return res.status(500).json({
                     success: false,
-                    message: 'The provided email and name do not match our records.',
+                    message: 'Error sending OTP email. Please try again later.',
                 });
             }
-
-            // Generate a 6-digit OTP
-            const otp = Math.floor(100000 + Math.random() * 900000); // Generates a 6-digit number
-            otpStore[email] = otp; // Store OTP temporarily
-
-            // Send OTP via email
-            const mailOptions = {
-                from: 'osnanotify@gmail.com',
-                to: email,
-                subject: 'Password Reset OTP',
-                text: `Your OTP for password reset is ${otp}. It will expire in 10 minutes.`,
-            };
-
-            transporter.sendMail(mailOptions, (error, info) => {
-                if (error) {
-                    console.error('Error sending OTP email:', error);
-                    return res.status(500).json({
-                        success: false,
-                        message: 'Error sending OTP email. Please try again later.',
-                    });
-                }
-                console.log('OTP sent: ' + info.response);
-                return res.status(200).json({ success: true, message: 'OTP sent, dont share to anyone!.' });
-            });
+            console.log('OTP sent: ' + info.response);
+            return res.status(200).json({ success: true, message: 'OTP sent, don\'t share it with anyone!' });
         });
-    } catch (error) {
-        console.error('Unexpected error:', error);
-        res.status(500).json({ success: false, message: 'Server error.' });
-    }
+    });
 });
 
 
-// Route to verify OTP and reset the password
 app.post('/verify-otp', (req, res) => {
     const { email, name, otp, newPassword } = req.body;
 
     if (!email || !name || !otp || !newPassword) {
-        return res.status(400).json({ success: false, message: 'all field are required.' });
+        return res.status(400).json({ success: false, message: 'All fields are required.' });
     }
 
     try {
@@ -137,31 +144,31 @@ app.post('/verify-otp', (req, res) => {
             return res.status(400).json({ success: false, message: 'Invalid OTP.' });
         }
 
-        // Optionally, set expiration time for OTP validation (e.g., 10 minutes)
-        delete otpStore[email]; // Remove OTP after successful validation
+        // Remove OTP after successful validation
+        delete otpStore[email];
 
-        // Verify that the email and name match in the database
-        const checkUserQuery = 'SELECT * FROM patient_info WHERE email = ? AND name = ?';
-        db.query(checkUserQuery, [email, name], (err, results) => {
+        // Verify email and name in the database
+        const checkUserQuery = 'SELECT * FROM patient_info WHERE email = $1 AND name = $2';
+        db.query(checkUserQuery, [email, name], (err, result) => {
             if (err) {
                 console.error('Database error:', err);
                 return res.status(500).json({ success: false, message: 'Database error.' });
             }
 
-            if (results.length === 0) {
+            if (result.rows.length === 0) {
                 return res.status(404).json({ success: false, message: 'Email and name do not match any records.' });
             }
 
-            // Update the password
-            const updatePasswordQuery = 'UPDATE patient_info SET password = ? WHERE email = ? AND name = ?';
-            db.query(updatePasswordQuery, [newPassword, email, name], (err, results) => {
+            // Update password
+            const updatePasswordQuery = 'UPDATE patient_info SET password = $1 WHERE email = $2 AND name = $3';
+            db.query(updatePasswordQuery, [newPassword, email, name], (err, updateResult) => {
                 if (err) {
                     console.error('Error updating password:', err);
                     return res.status(500).json({ success: false, message: 'Error updating password.' });
                 }
 
-                if (results.affectedRows > 0) {
-                    return res.json({ success: true, message: 'Password save successful, You can Login!.' });
+                if (updateResult.rowCount > 0) {
+                    return res.json({ success: true, message: 'Password saved successfully. You can now login!' });
                 } else {
                     // This case shouldn't normally happen, as we already checked for the user
                     return res.status(404).json({ success: false, message: 'Failed to update password. User not found.' });
@@ -175,22 +182,25 @@ app.post('/verify-otp', (req, res) => {
 });
 
 
-
 // Get Patient Information by Username
 app.get('/patient/:username', (req, res) => {
     const { username } = req.params;
-    const query = 'SELECT * FROM patient_info WHERE username = ?';
-    db.query(query, [username], (err, results) => {
+    const query = 'SELECT * FROM patient_info WHERE username = $1';
+
+    db.query(query, [username], (err, result) => {
         if (err) {
             console.error('Error fetching patient info:', err);
             return res.status(500).send('Server error');
         }
-        if (results.length === 0) {
+
+        if (result.rows.length === 0) {
             return res.status(404).send('Patient not found');
         }
-        res.json(results[0]);
+
+        res.json(result.rows[0]);
     });
 });
+
 
 
 // Fetch Patient Info Using Query
@@ -198,199 +208,220 @@ app.get('/vital', (req, res) => {
     const { username } = req.query;
 
     const query = `
-       SELECT 
-           patient_info.*, 
-           vitalsigns.*
-       FROM 
-           patient_info
-       JOIN 
-           vitalsigns 
-       ON 
-           patient_info.username = vitalsigns.username
-       WHERE 
-           patient_info.username = ?
-       ORDER BY 
-           vitalsigns.date_added DESC
-       LIMIT 1;`;  // This ensures only the latest record is returned
+        SELECT 
+            patient_info.*, 
+            vitalsigns.*
+        FROM 
+            patient_info
+        JOIN 
+            vitalsigns 
+        ON 
+            patient_info.username = vitalsigns.username
+        WHERE 
+            patient_info.username = $1
+        ORDER BY 
+            vitalsigns.date_added DESC
+        LIMIT 1;  -- Ensures only the latest record is returned
+    `;
 
-    db.query(query, [username], (err, results) => {
+    db.query(query, [username], (err, result) => {
         if (err) {
+            console.error('Database error:', err);
             return res.status(500).send('Server error');
         }
-        if (results.length > 0) {
-            res.json(results[0]);
+
+        if (result.rows.length > 0) {
+            res.json(result.rows[0]);
         } else {
             res.status(404).send('User not found');
         }
     });
 });
 
-
 app.get('/patient-info', (req, res) => {
     const { username, filter } = req.query;
-  
+
     if (!username) {
-      return res.status(400).send('Username is required');
+        return res.status(400).send('Username is required');
     }
-  
+
     const today = new Date();
-    const startOfYear = new Date(today.getFullYear(), 0, 1);  // Start of the year
-    const endOfYear = new Date(today.getFullYear() + 1, 0, 0);  // End of the year
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);  // Start of the month
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);  // End of the month
+    const startOfYear = new Date(today.getFullYear(), 0, 1); // Start of the year
+    const endOfYear = new Date(today.getFullYear() + 1, 0, 0); // End of the year
+    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1); // Start of the month
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0); // End of the month
     const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()); // Start of the day
-  
+
     let dateFilterStart;
-    let dateFilterEnd = today;  // End date is today by default
-  
-    // Adjust for the filter option: 'All', 'Month', or 'Year', but default to 'Today'
+    let dateFilterEnd = today; // Default end date is today
+
+    // Adjust for the filter option
     switch (filter) {
-      case 'Month':
-        dateFilterStart = startOfMonth;
-        dateFilterEnd = endOfMonth;
-        break;
-      case 'Year':
-        dateFilterStart = startOfYear;
-        dateFilterEnd = endOfYear;
-        break;
-      case 'All Months':
-      case 'All Years':
-        // No date restriction for all months/years
-        dateFilterStart = null;
-        dateFilterEnd = null;
-        break;
-      case 'Today':
-      default:
-        dateFilterStart = startOfDay;
-        dateFilterEnd = today;
-        break;
+        case 'Month':
+            dateFilterStart = startOfMonth;
+            dateFilterEnd = endOfMonth;
+            break;
+        case 'Year':
+            dateFilterStart = startOfYear;
+            dateFilterEnd = endOfYear;
+            break;
+        case 'All Months':
+        case 'All Years':
+            dateFilterStart = null;
+            dateFilterEnd = null;
+            break;
+        case 'Today':
+        default:
+            dateFilterStart = startOfDay;
+            dateFilterEnd = today;
+            break;
     }
-  
+
     let query = `
-      SELECT 
-          patient_info.*, 
-          vitalsigns.* 
-      FROM 
-          patient_info
-      JOIN 
-          vitalsigns 
-      ON 
-          patient_info.username = vitalsigns.username
-      WHERE 
-          patient_info.username = ?
+        SELECT 
+            patient_info.*, 
+            vitalsigns.*
+        FROM 
+            patient_info
+        JOIN 
+            vitalsigns 
+        ON 
+            patient_info.username = vitalsigns.username
+        WHERE 
+            patient_info.username = $1
     `;
-    
-    // Only add date filters if they are set
+
+    // Add date filters if applicable
+    const params = [username];
     if (dateFilterStart && dateFilterEnd) {
-      query += ` AND vitalsigns.date_added >= ? AND vitalsigns.date_added <= ?`;
+        query += ` AND vitalsigns.date_added >= $2 AND vitalsigns.date_added <= $3`;
+        params.push(dateFilterStart, dateFilterEnd);
     }
-    
+
     query += ` ORDER BY vitalsigns.date_added DESC`;
-  
+
     // Query the database
-    db.query(query, [username, dateFilterStart, dateFilterEnd].filter(Boolean), (err, results) => {
-      if (err) {
-        console.error('Database query error:', err);
-        return res.status(500).send('Server error');
-      }
-  
-      if (results.length > 0) {
-        return res.json(results);
-      } else {
-        return res.json([]); // Return an empty array instead of a 404 error
-      }
+    db.query(query, params, (err, result) => {
+        if (err) {
+            console.error('Database query error:', err);
+            return res.status(500).send('Server error');
+        }
+
+        if (result.rows.length > 0) {
+            return res.json(result.rows);
+        } else {
+            return res.json([]); // Return an empty array instead of a 404 error
+        }
     });
-  });
-  
+});
+
 // Fetch Announcements (ordered by date)
 app.get('/announcements', (req, res) => {
     const query = 'SELECT * FROM announcement ORDER BY date DESC';
-    db.query(query, (err, results) => {
+
+    db.query(query, (err, result) => {
         if (err) {
             console.error('Error fetching announcements:', err);
             return res.status(500).send('Internal Server Error');
         }
-        res.json(results);
+        res.json(result.rows);
     });
 });
-
-//fetch treatment 
-
 
 // Fetch Treatment with Diagnosis and apply filters (today, this month, this year, or all)
 app.get('/treatment', (req, res) => {
     const { username, filter } = req.query;
-    
+
+    if (!username) {
+        return res.status(400).send('Username is required');
+    }
+
     // Define the filter conditions for today, this month, this year
     let dateCondition = '';
     const currentDate = new Date();
-    const startOfDay = new Date(currentDate.setHours(0, 0, 0, 0)); // Today
-    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1); // This month
-    const startOfYear = new Date(currentDate.getFullYear(), 0, 1); // This year
-    
+    const startOfDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate()); // Start of today
+    const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1); // Start of this month
+    const startOfYear = new Date(currentDate.getFullYear(), 0, 1); // Start of this year
+
     // Build date condition based on the filter
     if (filter === 'today') {
-        dateCondition = ` AND dc.date_created >= '${startOfDay.toISOString()}'`;
+        dateCondition = ` AND dc.date_created >= $2`;
     } else if (filter === 'thisMonth') {
-        dateCondition = ` AND dc.date_created >= '${startOfMonth.toISOString()}'`;
+        dateCondition = ` AND dc.date_created >= $2`;
     } else if (filter === 'thisYear') {
-        dateCondition = ` AND dc.date_created >= '${startOfYear.toISOString()}'`;
+        dateCondition = ` AND dc.date_created >= $2`;
     }
 
     // SQL query to join doctor_confirm with prediction
     const query = `
-    SELECT 
-        dc.diagnosis, 
-        p.predicted_treatment,
-        dc.date_created
-    FROM 
-        doctor_confirm dc
-    LEFT JOIN 
-        prediction p 
-    ON 
-        dc.username = p.username  -- Use username as the join condition
-    WHERE 
-        dc.username = ? ${dateCondition}
-    ORDER BY 
-        dc.date_created DESC
-`;
+        SELECT 
+            dc.diagnosis, 
+            p.predicted_treatment,
+            dc.date_created
+        FROM 
+            doctor_confirm dc
+        LEFT JOIN 
+            prediction p 
+        ON 
+            dc.username = p.username
+        WHERE 
+            dc.username = $1 ${dateCondition}
+        ORDER BY 
+            dc.date_created DESC
+    `;
 
-    
-    db.query(query, [username], (err, results) => {
+    // Define query parameters
+    const params = [username];
+    if (filter === 'today') {
+        params.push(startOfDay);
+    } else if (filter === 'thisMonth') {
+        params.push(startOfMonth);
+    } else if (filter === 'thisYear') {
+        params.push(startOfYear);
+    }
+
+    // Execute the query
+    db.query(query, params, (err, result) => {
         if (err) {
             console.error('Error fetching treatment and diagnosis:', err);
             return res.status(500).send('Internal Server Error');
         }
-        res.json(results);
+        res.json(result.rows);
     });
 });
 
 app.get('/prescription-history', (req, res) => {
     const { username, filter } = req.query;
+
+    if (!username) {
+        return res.status(400).send('Username is required');
+    }
+
     let query = `
         SELECT *
         FROM doctor_confirm
-        WHERE username IN (SELECT username FROM patient_info WHERE username = ?)
+        WHERE username = $1
     `;
     
     // Add filtering logic based on the filter parameter
     if (filter === 'today') {
-        query += ` AND DATE(date_created) = CURDATE()`;
+        query += ` AND date_trunc('day', date_created) = date_trunc('day', CURRENT_DATE)`;
     } else if (filter === 'this_month') {
-        query += ` AND MONTH(date_created) = MONTH(CURDATE()) AND YEAR(date_created) = YEAR(CURDATE())`;
+        query += ` AND date_trunc('month', date_created) = date_trunc('month', CURRENT_DATE)`;
     } else if (filter === 'this_year') {
-        query += ` AND YEAR(date_created) = YEAR(CURDATE())`;
+        query += ` AND date_trunc('year', date_created) = date_trunc('year', CURRENT_DATE)`;
     }
 
-    db.query(query, [username], (err, results) => {
+    query += ` ORDER BY date_created DESC`; // Order by latest records
+
+    db.query(query, [username], (err, result) => {
         if (err) {
             console.error('Error fetching prescription history:', err);
             return res.status(500).send('Server error');
         }
-        res.json(results);
+        res.json(result.rows);
     });
 });
-
 
 
 // Update patient information endpoint
@@ -404,28 +435,28 @@ app.post('/update_patient_info', (req, res) => {
     }
 
     // Fetch current date_created value
-    const getDateCreatedQuery = 'SELECT date_created FROM patient_info WHERE username = ?';
+    const getDateCreatedQuery = 'SELECT date_created FROM patient_info WHERE username = $1';
     db.query(getDateCreatedQuery, [username], (err, result) => {
         if (err) {
             console.error('Error fetching date_created:', err);
             return res.status(500).json({ success: false, message: 'Server error' });
         }
         
-        const dateCreated = result[0]?.date_created;
+        const dateCreated = result.rows[0]?.date_created;
 
         // Update the patient information
         const updateQuery = `
         UPDATE patient_info SET
-            email = ?, 
-            name = ?, 
-            guardian = ?, 
-            address = ?, 
-            contactnum = ?, 
-            age = ?, 
-            sex = ?, 
-            civil_status = ?, 
-            dob = ?
-        WHERE username = ?`;
+            email = $1, 
+            name = $2, 
+            guardian = $3, 
+            address = $4, 
+            contactnum = $5, 
+            age = $6, 
+            sex = $7, 
+            civil_status = $8, 
+            dob = $9
+        WHERE username = $10`;
 
         db.query(updateQuery, [email, name, guardian, address, contactnum, age, sex, civil_status, dob, username], (err, result) => {
             if (err) {
@@ -434,7 +465,7 @@ app.post('/update_patient_info', (req, res) => {
             }
 
             // Restore the original date_created value
-            const restoreDateQuery = 'UPDATE patient_info SET date_created = ? WHERE username = ?';
+            const restoreDateQuery = 'UPDATE patient_info SET date_created = $1 WHERE username = $2';
             db.query(restoreDateQuery, [dateCreated, username], (restoreErr, restoreResult) => {
                 if (restoreErr) {
                     console.error('Error restoring date_created:', restoreErr);
@@ -449,35 +480,24 @@ app.post('/update_patient_info', (req, res) => {
 // Get patient information by username
 app.get('/get_patient_info', (req, res) => {
     const { username } = req.query;
-    
+
     if (!username) {
         return res.status(400).json({ success: false, message: 'Username is required' });
     }
 
-    const query = 'SELECT * FROM patient_info WHERE username = ?';
-    
+    const query = 'SELECT * FROM patient_info WHERE username = $1';
+
     db.query(query, [username], (err, result) => {
         if (err) {
             console.error('Error fetching patient data:', err);
             return res.status(500).json({ success: false, message: 'Server error' });
         }
 
-        if (result.length === 0) {
+        if (result.rows.length === 0) {
             return res.status(404).json({ success: false, message: 'Patient not found' });
         }
 
-        return res.status(200).json({ success: true, data: result[0] });
+        return res.status(200).json({ success: true, data: result.rows[0] });
     });
 });
 
-
-
-
-
-
-
-
-// Server Listening on Port
-app.listen(port, () => {
-    console.log(`Server running on port ${port}`);
-});
