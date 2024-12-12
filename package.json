@@ -1,5 +1,5 @@
 {
-  "name": "osntify",
+  "name": "patient",
   "version": "1.0.0",
   "description": "Backend for the osnatify App using Express and PostgreSQL",
   "main": "server.js",
