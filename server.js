@@ -326,31 +326,33 @@ app.get('/announcements', (req, res) => {
     });
 });
 
-// Fetch Treatment with Diagnosis and apply filters (today, this month, this year, or all)
+// Fetch Treatment with Diagnosis and apply filters (today, this month, this year, specific year, or all)
 app.get('/treatment', (req, res) => {
-    const { username, filter } = req.query;
+    const { username, filter, year } = req.query;
 
     if (!username) {
         return res.status(400).send('Username is required');
     }
 
-    // Define the filter conditions for today, this month, this year
+    // Define the filter conditions for today, this month, this year, or specific year
     let dateCondition = '';
     const currentDate = new Date();
     const startOfDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), currentDate.getDate()); // Start of today
     const startOfMonth = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1); // Start of this month
     const startOfYear = new Date(currentDate.getFullYear(), 0, 1); // Start of this year
+    const startOfSpecificYear = year ? new Date(year, 0, 1) : null;
+    const endOfSpecificYear = year ? new Date(year, 11, 31, 23, 59, 59) : null;
 
-    // Build date condition based on the filter
     if (filter === 'today') {
         dateCondition = ` AND dc.date_created >= $2`;
     } else if (filter === 'thisMonth') {
         dateCondition = ` AND dc.date_created >= $2`;
     } else if (filter === 'thisYear') {
         dateCondition = ` AND dc.date_created >= $2`;
+    } else if (filter === 'specificYear' && startOfSpecificYear && endOfSpecificYear) {
+        dateCondition = ` AND dc.date_created BETWEEN $2 AND $3`;
     }
 
-    // SQL query to join doctor_confirm with prediction
     const query = `
         SELECT 
             dc.diagnosis, 
@@ -368,7 +370,6 @@ app.get('/treatment', (req, res) => {
             dc.date_created DESC
     `;
 
-    // Define query parameters
     const params = [username];
     if (filter === 'today') {
         params.push(startOfDay);
@@ -376,9 +377,10 @@ app.get('/treatment', (req, res) => {
         params.push(startOfMonth);
     } else if (filter === 'thisYear') {
         params.push(startOfYear);
+    } else if (filter === 'specificYear' && startOfSpecificYear && endOfSpecificYear) {
+        params.push(startOfSpecificYear, endOfSpecificYear);
     }
 
-    // Execute the query
     db.query(query, params, (err, result) => {
         if (err) {
             console.error('Error fetching treatment and diagnosis:', err);
@@ -387,6 +389,7 @@ app.get('/treatment', (req, res) => {
         res.json(result.rows);
     });
 });
+
 app.get('/prescription-history', (req, res) => {
     const { username, filter, year } = req.query;
 
