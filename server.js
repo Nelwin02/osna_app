@@ -387,9 +387,8 @@ app.get('/treatment', (req, res) => {
         res.json(result.rows);
     });
 });
-
 app.get('/prescription-history', (req, res) => {
-    const { username, filter } = req.query;
+    const { username, filter, year } = req.query;
 
     if (!username) {
         return res.status(400).send('Username is required');
@@ -400,19 +399,22 @@ app.get('/prescription-history', (req, res) => {
         FROM doctor_confirm
         WHERE username = $1
     `;
-    
-    // Add filtering logic based on the filter parameter
+    const params = [username];
+
     if (filter === 'today') {
         query += ` AND date_trunc('day', date_created) = date_trunc('day', CURRENT_DATE)`;
     } else if (filter === 'this_month') {
         query += ` AND date_trunc('month', date_created) = date_trunc('month', CURRENT_DATE)`;
     } else if (filter === 'this_year') {
         query += ` AND date_trunc('year', date_created) = date_trunc('year', CURRENT_DATE)`;
+    } else if (filter === 'year' && year) {
+        query += ` AND EXTRACT(YEAR FROM date_created) = $2`;
+        params.push(year);
     }
 
-    query += ` ORDER BY date_created DESC`; // Order by latest records
+    query += ` ORDER BY date_created DESC`;
 
-    db.query(query, [username], (err, result) => {
+    db.query(query, params, (err, result) => {
         if (err) {
             console.error('Error fetching prescription history:', err);
             return res.status(500).send('Server error');
