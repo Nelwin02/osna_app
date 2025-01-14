@@ -235,83 +235,69 @@ app.get('/vital', (req, res) => {
         }
     });
 });
-
 app.get('/patient-info', (req, res) => {
-    const { username, filter } = req.query;
+  const { username, filter, year } = req.query;
 
-    if (!username) {
-        return res.status(400).send('Username is required');
+  if (!username) {
+    return res.status(400).send('Username is required');
+  }
+
+  const today = new Date();
+  const startOfYear = new Date(today.getFullYear(), 0, 1);
+  const endOfYear = new Date(today.getFullYear() + 1, 0, 0);
+  const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+  const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+  const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+
+  let dateFilterStart;
+  let dateFilterEnd;
+
+  switch (filter) {
+    case 'Month':
+      dateFilterStart = startOfMonth;
+      dateFilterEnd = endOfMonth;
+      break;
+    case 'Year':
+      dateFilterStart = startOfYear;
+      dateFilterEnd = endOfYear;
+      break;
+    case 'Specific Year':
+      dateFilterStart = new Date(year, 0, 1);
+      dateFilterEnd = new Date(Number(year) + 1, 0, 0);
+      break;
+    case 'Today':
+      dateFilterStart = startOfDay;
+      dateFilterEnd = today;
+      break;
+    default:
+      dateFilterStart = null;
+      dateFilterEnd = null;
+  }
+
+  let query = `
+    SELECT patient_info.*, vitalsigns.*
+    FROM patient_info
+    JOIN vitalsigns ON patient_info.username = vitalsigns.username
+    WHERE patient_info.username = $1
+  `;
+
+  const params = [username];
+  if (dateFilterStart && dateFilterEnd) {
+    query += ` AND vitalsigns.date_added BETWEEN $2 AND $3`;
+    params.push(dateFilterStart, dateFilterEnd);
+  }
+
+  query += ' ORDER BY vitalsigns.date_added DESC';
+
+  db.query(query, params, (err, result) => {
+    if (err) {
+      console.error('Database query error:', err);
+      return res.status(500).send('Server error');
     }
-
-    const today = new Date();
-    const startOfYear = new Date(today.getFullYear(), 0, 1); // Start of the year
-    const endOfYear = new Date(today.getFullYear() + 1, 0, 0); // End of the year
-    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1); // Start of the month
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0); // End of the month
-    const startOfDay = new Date(today.getFullYear(), today.getMonth(), today.getDate()); // Start of the day
-
-    let dateFilterStart;
-    let dateFilterEnd = today; // Default end date is today
-
-    // Adjust for the filter option
-    switch (filter) {
-        case 'Month':
-            dateFilterStart = startOfMonth;
-            dateFilterEnd = endOfMonth;
-            break;
-        case 'Year':
-            dateFilterStart = startOfYear;
-            dateFilterEnd = endOfYear;
-            break;
-        case 'All Months':
-        case 'All Years':
-            dateFilterStart = null;
-            dateFilterEnd = null;
-            break;
-        case 'Today':
-        default:
-            dateFilterStart = startOfDay;
-            dateFilterEnd = today;
-            break;
-    }
-
-    let query = `
-        SELECT 
-            patient_info.*, 
-            vitalsigns.*
-        FROM 
-            patient_info
-        JOIN 
-            vitalsigns 
-        ON 
-            patient_info.username = vitalsigns.username
-        WHERE 
-            patient_info.username = $1
-    `;
-
-    // Add date filters if applicable
-    const params = [username];
-    if (dateFilterStart && dateFilterEnd) {
-        query += ` AND vitalsigns.date_added >= $2 AND vitalsigns.date_added <= $3`;
-        params.push(dateFilterStart, dateFilterEnd);
-    }
-
-    query += ` ORDER BY vitalsigns.date_added DESC`;
-
-    // Query the database
-    db.query(query, params, (err, result) => {
-        if (err) {
-            console.error('Database query error:', err);
-            return res.status(500).send('Server error');
-        }
-
-        if (result.rows.length > 0) {
-            return res.json(result.rows);
-        } else {
-            return res.json([]); // Return an empty array instead of a 404 error
-        }
-    });
+    return res.json(result.rows.length > 0 ? result.rows : []);
+  });
 });
+
 
 // Fetch Announcements (ordered by date)
 app.get('/announcements', (req, res) => {
